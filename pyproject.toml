@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "driftwatch"
+version = "0.1.0"
+description = "Your AI model was fair at launch. Is it still? A multi-agent auditor that catches fairness drift in deployed models, finds the cause, and maps the fix to NIST AI RMF."
+readme = "README.md"
+license = {text = "MIT"}
+authors = [{name = "Zemen Ghelaw"}]
+requires-python = ">=3.11"
+dependencies = ["numpy>=1.26", "pandas>=2.2", "scipy>=1.11", "scikit-learn>=1.4", "matplotlib>=3.8",
+                "mcp>=2", "openai>=1", "anthropic>=0.40"]
+keywords = ["responsible-ai", "fairness", "model-monitoring", "drift-detection", "ai-agents",
+            "multi-agent", "mcp", "nist-ai-rmf", "healthcare-ai", "ai-governance"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+dw = "driftwatch.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning", "ignore::FutureWarning"]
