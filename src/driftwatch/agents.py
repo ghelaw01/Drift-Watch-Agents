@@ -127,6 +127,15 @@ def agent_audit(toolbox: Toolbox, model) -> AuditResult:
     monitor = Agent("monitor", MONITOR, model, toolbox, ["data_overview", "detect_fairness_drift", "fairness_trend"])
     incidents = parse_json(monitor.run("Audit these prediction logs for fairness drift.", result)).get("incidents", [])
 
+    # Coverage check, in code: every group with a statistical alert must be investigated.
+    # In testing, a model sometimes reported only the first of two incidents.
+    reported = {i.get("group") for i in incidents}
+    for a in toolbox.detect_fairness_drift()["alerts"]:
+        if a["group"] not in reported:
+            reported.add(a["group"])
+            incidents.append({"group": a["group"], "start_month": a["first_month"], "metrics": [a["metric"]],
+                              "summary": f"{a['metric']} changed by {a['change']} (added by coverage check)"})
+
     for inc in incidents:
         finding = {"group": inc.get("group"), "start_month": inc.get("start_month"),
                    "metrics": inc.get("metrics", []), "summary": inc.get("summary", "")}
