@@ -1,0 +1,45 @@
+# DriftWatch add-on 2 (optional, off by default): a Lakehouse (data quality) monitor on the
+# gold fairness metrics table. A monitor needs an existing table, so deploy it after the
+# job has run once:
+#
+#   cd databricks/addons/monitor
+#   databricks bundle deploy -t prod
+#
+# CI deploys it only when the repository variable DATABRICKS_DEPLOY_MONITOR is "true".
+# Not tested on Free Edition; if monitors are not available there, leave it off.
+bundle:
+  name: driftwatch-monitor
+  databricks_cli_version: ">= 1.23.0"
+
+variables:
+  catalog:
+    default: workspace
+  schema:
+    description: Schema of the main bundle (dev mode adds the prefix dev_<user>_).
+    default: driftwatch
+
+resources:
+  quality_monitors:
+    gold_fairness_metrics:
+      table_name: ${var.catalog}.${var.schema}.gold_fairness_metrics
+      output_schema_name: ${var.catalog}.${var.schema}
+      assets_dir: /Workspace/Users/${workspace.current_user.userName}/driftwatch_monitoring/${bundle.target}
+      snapshot: {}                     # profile the whole table on each refresh
+      slicing_exprs:
+        - "`group`"                    # one slice per payer group
+      skip_builtin_dashboard: true     # saves the single Free Edition warehouse
+
+targets:
+  dev:
+    mode: development
+    default: true
+    variables:
+      schema: dev_${workspace.current_user.short_name}_driftwatch
+
+  prod:
+    mode: production
+    workspace:
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+    permissions:
+      - level: CAN_MANAGE
+        user_name: ${workspace.current_user.userName}

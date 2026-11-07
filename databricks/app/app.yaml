@@ -1,0 +1,14 @@
+# Runtime config for the DriftWatch Databricks App.
+# When the app is deployed with the bundle, `config` in resources/app.yml overrides this file
+# (the bundle knows the real catalog and schema for each target). This file is the fallback
+# for a manual deploy of this folder.
+command: ["streamlit", "run", "app.py"]
+env:
+  - name: DATABRICKS_WAREHOUSE_ID
+    valueFrom: sql-warehouse          # the app resource named "sql-warehouse"
+  - name: DW_CATALOG
+    value: workspace
+  - name: DW_SCHEMA
+    value: driftwatch
+  - name: STREAMLIT_BROWSER_GATHER_USAGE_STATS
+    value: "false"
