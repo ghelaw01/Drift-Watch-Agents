@@ -23,6 +23,15 @@ Every incident found got the right start month (within 1), the right cause, the 
 and the right action. The agent team matches the statistics exactly and adds the
 investigation, the NIST AI RMF mapping, and a report a governance committee can read.
 
+### Run on Databricks
+
+The [`databricks/`](databricks/README.md) folder runs DriftWatch end to end on Databricks, and it
+works on the free **Databricks Free Edition** (serverless only). It is one Asset Bundle with Unity
+Catalog, a bronze/silver/gold Lakeflow pipeline with data quality rules, MLflow and the UC model
+registry, a daily job, a Streamlit Databricks App, and optional Model Serving. A GitHub Actions
+workflow tests and deploys it. It is ready to deploy; see
+[databricks/README.md](databricks/README.md) for the setup steps.
+
 ---
 
 ## How it works
@@ -162,6 +171,7 @@ python bench/report.py
 | `src/driftwatch/simulate.py` | Simulated hospital logs with planted, known problems |
 | `src/driftwatch/llm.py` | One tool-calling interface for OpenAI and Claude |
 | `bench/` | Benchmark runner and report |
+| `databricks/` | Databricks Asset Bundle: pipeline, job, MLflow model, app, serving ([guide](databricks/README.md)) |
 
 ## Roadmap
 
