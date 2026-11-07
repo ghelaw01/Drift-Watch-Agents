@@ -1,0 +1,89 @@
+# DriftWatch on Databricks: a Declarative Automation Bundle (Databricks Asset Bundle).
+# Designed for Databricks Free Edition: serverless compute only, no cluster definitions.
+#
+#   databricks bundle validate            # dev target (default)
+#   databricks bundle deploy -t prod
+#   databricks bundle run fairness_audit -t prod
+#
+# The model serving endpoint (addons/serving) and the optional quality monitor
+# (addons/monitor) are separate small bundles: they need a registered model version and a
+# table that only exist after the first job run. See README.md.
+bundle:
+  name: driftwatch
+  databricks_cli_version: ">= 1.23.0"
+
+include:
+  - resources/*.yml
+
+variables:
+  catalog:
+    description: Unity Catalog catalog. Free Edition gives you one called "workspace".
+    default: workspace
+  schema:
+    description: Schema for all DriftWatch tables, the volume, and the model. Prefixed in dev mode.
+    default: driftwatch
+  warehouse_id:
+    description: SQL warehouse the app queries. Free Edition has one, named "Serverless Starter Warehouse".
+    lookup:
+      warehouse: Serverless Starter Warehouse
+  app_name:
+    description: Name of the Databricks App (lowercase letters, numbers, hyphens). Apps get no dev prefix.
+    default: driftwatch
+  schedule_pause_status:
+    description: PAUSED or UNPAUSED. Paused by default to save Free Edition quota.
+    default: PAUSED
+  default_scenario:
+    description: Drift scenario planted by the daily run. See src/driftwatch_databricks/scenarios.py.
+    default: medicaid_undercoding
+  llm_secret_scope:
+    description: Secret scope for an optional LLM key (anthropic_api_key or openai_api_key).
+    default: driftwatch
+  serverless_env_version:
+    description: Serverless environment version for job tasks (Python 3.12 from version 3 on).
+    default: "4"
+
+artifacts:
+  # The core DriftWatch package, built from the repository root.
+  driftwatch_core:
+    type: whl
+    path: ..
+    build: python -m pip wheel --no-deps --wheel-dir dist .
+    files:
+      - source: ../dist/driftwatch-*.whl
+  # The Databricks helpers in this folder (job entry points, pipeline rules, audit step).
+  driftwatch_databricks:
+    type: whl
+    path: .
+    build: python -m pip wheel --no-deps --wheel-dir dist .
+    files:
+      - source: dist/driftwatch_databricks-*.whl
+
+# dist/, build/ and __pycache__ are already skipped through .gitignore.
+sync:
+  exclude:
+    - tests/**
+
+targets:
+  dev:
+    mode: development
+    default: true
+    presets:
+      artifacts_dynamic_version: true
+    variables:
+      app_name: driftwatch-dev
+      llm_secret_scope: driftwatch-dev
+
+  prod:
+    mode: production
+    presets:
+      artifacts_dynamic_version: true
+    workspace:
+      # A fixed path, shared by everyone who deploys prod (CI, or you from a laptop).
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+    # Free Edition: CI deploys as the user who owns DATABRICKS_TOKEN, so jobs run as that user.
+    # On a paid workspace, run as a service principal instead:
+    # run_as:
+    #   service_principal_name: 00000000-0000-0000-0000-000000000000
+    permissions:
+      - level: CAN_MANAGE
+        user_name: ${workspace.current_user.userName}

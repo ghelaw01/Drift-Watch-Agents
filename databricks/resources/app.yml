@@ -1,0 +1,27 @@
+# Databricks App: a small Streamlit dashboard for the audit results.
+# `bundle deploy` creates the app and uploads the code but does not start it (this saves
+# Free Edition quota). Start it with:  databricks bundle run driftwatch_app -t <target>
+resources:
+  apps:
+    driftwatch_app:
+      name: ${var.app_name}
+      description: DriftWatch fairness drift alerts, group trends, and NIST AI RMF controls.
+      source_code_path: ../app
+      resources:
+        - name: sql-warehouse
+          description: SQL warehouse used to read the DriftWatch tables.
+          sql_warehouse:
+            id: ${var.warehouse_id}
+            permission: CAN_USE
+      # Overrides app/app.yaml, because only the bundle knows the catalog and schema per target.
+      config:
+        command: ["streamlit", "run", "app.py"]
+        env:
+          - name: DATABRICKS_WAREHOUSE_ID
+            value_from: sql-warehouse
+          - name: DW_CATALOG
+            value: ${var.catalog}
+          - name: DW_SCHEMA
+            value: ${resources.schemas.driftwatch.name}
+          - name: STREAMLIT_BROWSER_GATHER_USAGE_STATS
+            value: "false"

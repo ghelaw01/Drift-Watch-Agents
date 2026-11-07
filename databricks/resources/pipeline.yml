@@ -1,0 +1,20 @@
+# Lakeflow Declarative Pipeline (formerly Delta Live Tables): bronze -> silver -> gold.
+resources:
+  pipelines:
+    medallion:
+      name: driftwatch-medallion
+      catalog: ${var.catalog}
+      schema: ${resources.schemas.driftwatch.name}
+      serverless: true
+      channel: CURRENT             # triggered (not continuous): it runs only when the job starts it
+      root_path: ../src            # added to sys.path, so the pipeline can import driftwatch_databricks
+      libraries:
+        - file:
+            path: ../src/pipeline/driftwatch_pipeline.py
+      configuration:
+        driftwatch.landing_path: /Volumes/${var.catalog}/${resources.schemas.driftwatch.name}/${resources.volumes.landing.name}/prediction_logs
+        driftwatch.baseline_months: "3"
+      event_log:
+        catalog: ${var.catalog}
+        schema: ${resources.schemas.driftwatch.name}
+        name: pipeline_event_log

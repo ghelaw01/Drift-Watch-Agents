@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "driftwatch-databricks"
+version = "0.1.0"
+description = "Databricks jobs and pipeline helpers for DriftWatch (data generation, training, audit)."
+license = {text = "MIT"}
+authors = [{name = "Zemen Ghelaw"}]
+requires-python = ">=3.11"
+# The `driftwatch` package is installed next to this one from its own wheel (see
+# resources/job.yml). It is not listed here, so pip never looks for it on PyPI.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pyyaml>=6", "jsonschema>=4", "pyarrow>=14", "mlflow-skinny>=2.21,<4", "skops>=0.10"]
+
+# Entry points used by the python_wheel_task tasks in resources/job.yml.
+[project.scripts]
+dw-generate-data = "driftwatch_databricks.tasks:generate_data_main"
+dw-train-model = "driftwatch_databricks.tasks:train_model_main"
+dw-run-audit = "driftwatch_databricks.tasks:run_audit_main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["driftwatch_databricks*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "app"]
+filterwarnings = ["ignore::DeprecationWarning", "ignore::FutureWarning", "ignore::UserWarning"]

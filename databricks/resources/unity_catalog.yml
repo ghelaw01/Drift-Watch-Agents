@@ -1,0 +1,31 @@
+# Unity Catalog objects: the schema, a volume for raw files, the registered model,
+# the MLflow experiment, and a secret scope for an optional LLM key.
+resources:
+  schemas:
+    driftwatch:
+      catalog_name: ${var.catalog}
+      name: ${var.schema}
+      comment: DriftWatch fairness monitoring (bronze, silver, gold, findings). Managed by a bundle.
+
+  volumes:
+    landing:
+      catalog_name: ${var.catalog}
+      schema_name: ${resources.schemas.driftwatch.name}
+      name: landing
+      volume_type: MANAGED
+      comment: Raw prediction log files (bronze input) and Markdown audit reports.
+
+  registered_models:
+    readmission_model:
+      catalog_name: ${var.catalog}
+      schema_name: ${resources.schemas.driftwatch.name}
+      name: readmission_model
+      comment: 30-day readmission model (LogisticRegression). The `champion` alias is the deployed version.
+
+  experiments:
+    readmission:
+      name: /Users/${workspace.current_user.userName}/driftwatch-readmission-${bundle.target}
+
+  secret_scopes:
+    llm:
+      name: ${var.llm_secret_scope}

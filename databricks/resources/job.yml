@@ -1,0 +1,117 @@
+# Lakeflow Job: generate data -> refresh pipeline -> (retrain?) -> audit.
+# Serverless compute: no cluster definitions. Every Python task uses the `driftwatch`
+# environment, which installs the two wheels built by the `artifacts` section.
+resources:
+  jobs:
+    fairness_audit:
+      name: driftwatch-fairness-audit
+      description: >
+        Simulates hospital readmission prediction logs with a planted fairness problem, lands them
+        in a Unity Catalog volume, refreshes the bronze/silver/gold pipeline, optionally retrains and
+        registers the model, and runs the DriftWatch audit. Results go to Delta tables in
+        ${var.catalog}.${resources.schemas.driftwatch.name}.
+      max_concurrent_runs: 1
+      timeout_seconds: 3600
+      performance_target: STANDARD        # cheaper serverless mode; fine for a daily batch
+      queue:
+        enabled: true
+      schedule:
+        quartz_cron_expression: "0 0 6 * * ?"   # every day at 06:00
+        timezone_id: UTC
+        pause_status: ${var.schedule_pause_status}
+      tags:
+        project: driftwatch
+
+      parameters:
+        - name: scenario
+          default: ${var.default_scenario}
+        - name: seed
+          default: auto
+        - name: retrain
+          default: "true"
+        - name: train_window
+          default: baseline
+        - name: agent_audit
+          default: auto
+        - name: fail_on_incident
+          default: "false"
+
+      environments:
+        - environment_key: driftwatch
+          spec:
+            environment_version: ${var.serverless_env_version}
+            dependencies:
+              - ../../dist/driftwatch-*.whl
+              - ../dist/driftwatch_databricks-*.whl
+              - mlflow-skinny[databricks]>=2.21,<4
+              - skops>=0.10                 # MLflow 3 saves scikit-learn models with skops
+
+      tasks:
+        - task_key: generate_data
+          description: Simulate one batch of prediction logs and land it as Parquet in the volume.
+          environment_key: driftwatch
+          max_retries: 1
+          python_wheel_task:
+            package_name: driftwatch_databricks
+            entry_point: dw-generate-data
+            named_parameters:
+              catalog: ${var.catalog}
+              schema: ${resources.schemas.driftwatch.name}
+              volume: ${resources.volumes.landing.name}
+              scenario: "{{job.parameters.scenario}}"
+              seed: "{{job.parameters.seed}}"
+              run-id: "{{job.run_id}}"
+
+        - task_key: refresh_pipeline
+          description: Bronze (Auto Loader) -> silver (expectations) -> gold (fairness metrics).
+          depends_on:
+            - task_key: generate_data
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.medallion.id}
+            full_refresh: false
+
+        - task_key: should_retrain
+          description: Only retrain when the job parameter retrain is "true".
+          depends_on:
+            - task_key: refresh_pipeline
+          condition_task:
+            op: EQUAL_TO
+            left: "{{job.parameters.retrain}}"
+            right: "true"
+
+        - task_key: train_model
+          description: Train, log to MLflow, register in Unity Catalog, set the champion alias.
+          depends_on:
+            - task_key: should_retrain
+              outcome: "true"
+          environment_key: driftwatch
+          python_wheel_task:
+            package_name: driftwatch_databricks
+            entry_point: dw-train-model
+            named_parameters:
+              catalog: ${var.catalog}
+              schema: ${resources.schemas.driftwatch.name}
+              model-name: ${resources.registered_models.readmission_model.name}
+              experiment: ${resources.experiments.readmission.name}
+              batch-id: "{{job.parameters.scenario}}-{{job.run_id}}"
+              window: "{{job.parameters.train_window}}"
+
+        - task_key: run_audit
+          description: DriftWatch audit (rules, plus the agent team if an LLM key is in the secret scope).
+          depends_on:
+            - task_key: refresh_pipeline
+            - task_key: train_model
+          run_if: NONE_FAILED                # still runs when train_model was skipped
+          environment_key: driftwatch
+          python_wheel_task:
+            package_name: driftwatch_databricks
+            entry_point: dw-run-audit
+            named_parameters:
+              catalog: ${var.catalog}
+              schema: ${resources.schemas.driftwatch.name}
+              volume: ${resources.volumes.landing.name}
+              batch-id: "{{job.parameters.scenario}}-{{job.run_id}}"
+              agent-audit: "{{job.parameters.agent_audit}}"
+              secret-scope: ${resources.secret_scopes.llm.name}
+              app-name: ${resources.apps.driftwatch_app.name}
+              fail-on-incident: "{{job.parameters.fail_on_incident}}"
