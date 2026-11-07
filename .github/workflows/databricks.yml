@@ -1,0 +1,148 @@
+# Test the Databricks code, then validate and deploy the bundle in databricks/ to the
+# `prod` target. Deploy steps run only when the repository secret DATABRICKS_HOST is set,
+# so forks and repos without Databricks skip them cleanly (the tests still run).
+#
+# Secrets:    DATABRICKS_HOST, DATABRICKS_TOKEN
+# Variables:  DATABRICKS_CATALOG, DATABRICKS_SCHEMA, DATABRICKS_WAREHOUSE_ID   (all optional)
+#             DATABRICKS_DEPLOY_SERVING=true   deploy addons/serving (after the first job run)
+#             DATABRICKS_DEPLOY_MONITOR=true   deploy addons/monitor (after the first job run)
+# See databricks/README.md.
+name: databricks
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "databricks/**"
+      - "src/**"
+      - "pyproject.toml"
+      - ".github/workflows/databricks.yml"
+  workflow_dispatch:
+    inputs:
+      run_job:
+        description: "Run the DriftWatch job after deploying"
+        type: boolean
+        default: false
+      scenario:
+        description: "Drift scenario for that run"
+        type: choice
+        default: medicaid_undercoding
+        options: [medicaid_undercoding, medicare_population_shift, uninsured_followup_loss, two_incidents, none]
+      start_app:
+        description: "Start (and deploy the code of) the Databricks App. Free Edition stops it after 24 hours."
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: databricks-prod
+  cancel-in-progress: false
+
+env:
+  DATABRICKS_CLI_VERSION: "1.23.0"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install packages
+        run: |
+          pip install -e . -e "./databricks[dev]" "pyspark>=3.5,<4.1"
+      - uses: databricks/setup-cli@v1.23.0
+        with:
+          version: ${{ env.DATABRICKS_CLI_VERSION }}
+      - name: Unit tests, with the official bundle JSON schema
+        working-directory: databricks
+        run: |
+          databricks bundle schema > "$RUNNER_TEMP/bundle-schema.json"
+          DW_BUNDLE_SCHEMA="$RUNNER_TEMP/bundle-schema.json" python -m pytest -v
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    env:
+      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+    steps:
+      - name: Check for Databricks credentials
+        id: creds
+        run: |
+          if [ -n "$DATABRICKS_HOST" ] && [ -n "$DATABRICKS_TOKEN" ]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::DATABRICKS_HOST or DATABRICKS_TOKEN is not set. Skipping the Databricks deploy."
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.creds.outputs.ok == 'true'
+
+      - uses: actions/setup-python@v5
+        if: steps.creds.outputs.ok == 'true'
+        with:
+          python-version: "3.12"
+
+      - uses: databricks/setup-cli@v1.23.0
+        if: steps.creds.outputs.ok == 'true'
+        with:
+          version: ${{ env.DATABRICKS_CLI_VERSION }}
+
+      - name: Pass repository variables to the bundle
+        if: steps.creds.outputs.ok == 'true'
+        env:
+          V_CATALOG: ${{ vars.DATABRICKS_CATALOG }}
+          V_SCHEMA: ${{ vars.DATABRICKS_SCHEMA }}
+          V_WAREHOUSE: ${{ vars.DATABRICKS_WAREHOUSE_ID }}
+        run: |
+          # An empty BUNDLE_VAR_x still counts as set, so only export the ones that have a value.
+          if [ -n "$V_CATALOG" ]; then echo "BUNDLE_VAR_catalog=$V_CATALOG" >> "$GITHUB_ENV"; fi
+          if [ -n "$V_SCHEMA" ]; then echo "BUNDLE_VAR_schema=$V_SCHEMA" >> "$GITHUB_ENV"; fi
+          if [ -n "$V_WAREHOUSE" ]; then echo "BUNDLE_VAR_warehouse_id=$V_WAREHOUSE" >> "$GITHUB_ENV"; fi
+          echo "CATALOG=${V_CATALOG:-workspace}" >> "$GITHUB_ENV"
+          echo "SCHEMA=${V_SCHEMA:-driftwatch}" >> "$GITHUB_ENV"
+
+      - name: Validate bundle
+        if: steps.creds.outputs.ok == 'true'
+        working-directory: databricks
+        run: databricks bundle validate -t prod
+
+      - name: Deploy bundle
+        if: steps.creds.outputs.ok == 'true'
+        working-directory: databricks
+        run: databricks bundle deploy -t prod --auto-approve
+
+      - name: Run the DriftWatch job
+        if: steps.creds.outputs.ok == 'true' && github.event_name == 'workflow_dispatch' && inputs.run_job
+        working-directory: databricks
+        env:
+          SCENARIO: ${{ inputs.scenario }}
+        run: databricks bundle run fairness_audit -t prod --params "scenario=$SCENARIO"
+
+      - name: Start the Databricks App
+        if: steps.creds.outputs.ok == 'true' && github.event_name == 'workflow_dispatch' && inputs.start_app
+        working-directory: databricks
+        run: databricks bundle run driftwatch_app -t prod
+
+      - name: Deploy the model serving endpoint (add-on)
+        if: steps.creds.outputs.ok == 'true' && vars.DATABRICKS_DEPLOY_SERVING == 'true'
+        working-directory: databricks/addons/serving
+        run: |
+          MODEL="$CATALOG.$SCHEMA.readmission_model"
+          VERSION=$(databricks model-versions get-by-alias "$MODEL" champion -o json | python -c "import json,sys; print(json.load(sys.stdin)['version'])") || {
+            echo "::warning::No champion version of $MODEL yet. Run the job once, then deploy again."; exit 0; }
+          echo "Serving $MODEL version $VERSION"
+          databricks bundle validate -t prod --var="model_version=$VERSION"
+          databricks bundle deploy -t prod --auto-approve --var="model_version=$VERSION"
+
+      - name: Deploy the Lakehouse monitor (add-on)
+        if: steps.creds.outputs.ok == 'true' && vars.DATABRICKS_DEPLOY_MONITOR == 'true'
+        working-directory: databricks/addons/monitor
+        run: |
+          databricks bundle validate -t prod
+          databricks bundle deploy -t prod --auto-approve
